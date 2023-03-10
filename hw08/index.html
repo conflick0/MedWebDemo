@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>three.js webgl - loaders - NRRD loader</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link type="text/css" rel="stylesheet" href="main.css">
+</head>
+
+<body>
+<div id="info">
+    <a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> -
+    NRRD format loader test
+</div>
+<div id="inset"></div>
+
+<script type="module">
+    import * as THREE from "./build/three.module.js";
+    import {GUI} from "./jsm/libs/dat.gui.module.js";
+    import {
+        FileLoader,
+        Loader,
+        Matrix4,
+        Vector3,
+    } from "./build/three.module.js";
+    import Stats from "./jsm/libs/stats.module.js";
+    import {Volume} from "./jsm/misc/Volume.js";
+    import {NRRDLoader} from "./jsm/loaders/NRRDLoader.js";
+    import {TrackballControls} from "./jsm/controls/TrackballControls.js";
+
+    let container,
+        stats,
+        camera,
+        controls,
+        scene,
+        renderer
+    ;
+
+    var cube, box, sliceX, sliceY,sliceZ;
+    var sliceXGUI, sliceYGUI, sliceZGUI, lowerThresholdGUI, upperThresholdGUI, windowLowGUI, windowHighGUI;
+
+    init();
+    animate();
+
+    function init() {
+
+        camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1e10);
+        camera.position.z = 300;
+
+        scene = new THREE.Scene();
+
+        scene.add(camera);
+
+        // light
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x000000, 1);
+        scene.add(hemiLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight.position.set(200, 200, 200);
+        scene.add(dirLight);
+
+        // gui
+        const gui = new GUI();
+
+        initAxesHelper(scene, gui);
+
+        initModelControler(scene, gui);
+
+        // renderer
+        renderer = new THREE.WebGLRenderer();
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        container = document.createElement('div');
+        document.body.appendChild(container);
+        container.appendChild(renderer.domElement);
+
+        controls = new TrackballControls(camera, renderer.domElement);
+        controls.minDistance = 100;
+        controls.maxDistance = 500;
+        controls.rotateSpeed = 5.0;
+        controls.zoomSpeed = 5;
+        controls.panSpeed = 2;
+
+        stats = new Stats();
+        container.appendChild(stats.dom);
+
+        window.addEventListener('resize', onWindowResize);
+
+    }
+
+    function onWindowResize() {
+
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        controls.handleResize();
+
+    }
+
+    function animate() {
+
+        requestAnimationFrame(animate);
+
+        controls.update();
+
+        renderer.render(scene, camera);
+
+        stats.update();
+
+    }
+
+
+    function initAxesHelper(scene, gui) {
+        const axesHelper = new THREE.AxesHelper(100);
+        const axesHelperVisControl = {
+            visible: false
+        };
+        gui.add(axesHelperVisControl, 'visible').name('Axes Helper').onChange(function () {
+            axesHelper.visible = axesHelperVisControl.visible;
+            renderer.render(scene, camera);
+            scene.add(axesHelper);
+        });
+    }
+
+
+    function initModelControler(scene, gui) {
+        var controls = {
+            model: 'models/nrrd/cardiac.nrrd' // initial shape is cube
+        };
+
+        var options = {
+            cardiac: 'models/nrrd/cardiac_crop.nrrd',
+            head: 'models/dat/CThead_256_256_240_unit8.dat',
+            foot: 'models/raw/foot_256_256_256_uint8.raw'
+        };
+
+        // add a dropdown control to the GUI
+        var dropdown = gui.add(controls, 'model', options);
+
+        loadNRRDModel(scene, gui, options.cardiac);
+
+        // handle the dropdown selection change event
+        dropdown.onChange(function(value) {
+            var data_type = value.split('/')[1];
+            if (data_type === 'nrrd'){
+                removeModel(scene, gui);
+                loadNRRDModel(scene, gui, value);
+            }
+            else{
+                removeModel(scene, gui);
+                loadRawModel(scene, gui, value);
+            }
+        });
+    }
+
+    function removeModel(scene, gui){
+        gui.remove(sliceXGUI);
+        gui.remove(sliceYGUI);
+        gui.remove(sliceZGUI);
+        gui.remove(lowerThresholdGUI);
+        gui.remove(upperThresholdGUI);
+        gui.remove(windowHighGUI);
+        gui.remove(windowLowGUI);
+        scene.remove(cube);
+        scene.remove(box);
+        scene.remove(sliceX.mesh);
+        scene.remove(sliceY.mesh);
+        scene.remove(sliceZ.mesh);
+    }
+
+    function loadNRRDModel(scene, gui, filePath) {
+        const loader = new NRRDLoader();
+        loader.load(filePath, function (volume) {
+            //box helper to see the extend of the volume
+            const geometry = new THREE.BoxGeometry(volume.xLength, volume.yLength, volume.zLength);
+            const material = new THREE.MeshBasicMaterial({color: 0x00ff00});
+            cube = new THREE.Mesh(geometry, material);
+            cube.visible = false;
+            box = new THREE.BoxHelper(cube);
+            scene.add(box);
+            box.applyMatrix4(volume.matrix);
+            scene.add(cube);
+            setModelGUI(scene, gui, volume);
+        });
+    }
+
+    function loadRawModel(scene, gui, filePath) {
+        var reader = new FileReader();
+        let meta_info = filePath.split('/')[2].split('_');
+        let volDims = [parseInt(meta_info[1]), parseInt(meta_info[2]), parseInt(meta_info[3])];
+        let bit = meta_info[4];
+        reader.onload = function () {
+            var arrayBuffer = reader.result;
+            if (bit === 'uint8') {
+                var arraybuffer = new Uint8Array(arrayBuffer);
+            }
+            let volume = new Volume(
+                volDims[0],
+                volDims[1],
+                volDims[2],
+                bit,
+                arrayBuffer
+            );
+
+            const min_max = volume.computeMinMax();
+            const min = min_max[0];
+            const max = min_max[1];
+
+            volume.windowLow = min;
+            volume.windowHigh = max;
+
+            volume.matrix = new Matrix4();
+            const transitionMatrix = new Matrix4();
+            volume.inverseMatrix = new Matrix4();
+            volume.inverseMatrix.copy(volume.matrix).invert();
+            volume.RASDimensions = new Vector3(
+                volume.xLength,
+                volume.yLength,
+                volume.zLength
+            )
+                .applyMatrix4(volume.matrix)
+                .round()
+                .toArray()
+                .map(Math.abs);
+
+            if (volume.lowerThreshold === -Infinity) {
+                volume.lowerThreshold = min;
+            }
+
+            if (volume.upperThreshold === Infinity) {
+                volume.upperThreshold = max;
+            }
+
+            const geometry = new THREE.BoxGeometry(
+                volume.xLength,
+                volume.yLength,
+                volume.zLength,
+            )
+
+            const material = new THREE.MeshBasicMaterial({color: 0x00ff00});
+            cube = new THREE.Mesh(geometry, material);
+            cube.visible = false;
+            box = new THREE.BoxHelper(cube);
+            scene.add(box);
+            box.applyMatrix4(volume.matrix);
+            scene.add(cube);
+            setModelGUI(scene, gui, volume);
+        }
+        fetch(filePath)
+            .then(response => response.blob())
+            .then(blob => reader.readAsArrayBuffer(blob))
+            .catch(error => console.error(error));
+    }
+
+    function setModelGUI(scene, gui, volume) {
+
+        //z plane
+        sliceZ = volume.extractSlice('z', Math.floor(volume.RASDimensions[2] / 4));
+        scene.add(sliceZ.mesh);
+
+        //y plane
+        sliceY  = volume.extractSlice('y', Math.floor(volume.RASDimensions[1] / 2));
+        scene.add(sliceY.mesh);
+
+        //x plane
+        sliceX = volume.extractSlice('x', Math.floor(volume.RASDimensions[0] / 2));
+        scene.add(sliceX.mesh);
+
+        sliceXGUI = gui.add(sliceX, 'index', 0, volume.RASDimensions[0], 1).name('indexX').onChange(function () {
+
+            sliceX.repaint.call(sliceX);
+
+        });
+        sliceYGUI = gui.add(sliceY, 'index', 0, volume.RASDimensions[1], 1).name('indexY').onChange(function () {
+
+            sliceY.repaint.call(sliceY);
+
+        });
+        sliceZGUI = gui.add(sliceZ, 'index', 0, volume.RASDimensions[2], 1).name('indexZ').onChange(function () {
+
+            sliceZ.repaint.call(sliceZ);
+
+        });
+
+        lowerThresholdGUI = gui.add(volume, 'lowerThreshold', volume.min, volume.max, 1).name('Lower Threshold').onChange(function () {
+
+            volume.repaintAllSlices();
+
+        });
+        upperThresholdGUI = gui.add(volume, 'upperThreshold', volume.min, volume.max, 1).name('Upper Threshold').onChange(function () {
+
+            volume.repaintAllSlices();
+
+        });
+        windowLowGUI = gui.add(volume, 'windowLow', volume.min, volume.max, 1).name('Window Low').onChange(function () {
+
+            volume.repaintAllSlices();
+
+        });
+        windowHighGUI = gui.add(volume, 'windowHigh', volume.min, volume.max, 1).name('Window High').onChange(function () {
+
+            volume.repaintAllSlices();
+
+        });
+
+    }
+
+</script>
+
+</body>
+</html>
