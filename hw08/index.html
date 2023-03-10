@@ -140,6 +140,7 @@
         // add a dropdown control to the GUI
         var dropdown = gui.add(controls, 'model', options);
 
+        dropdown.setValue(options.cardiac)
         loadNRRDModel(scene, gui, options.cardiac);
 
         // handle the dropdown selection change event
